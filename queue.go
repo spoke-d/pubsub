@@ -7,7 +7,7 @@ type Node struct {
 	done  func()
 }
 
-// Queue reoresents a single instance of a queue structure.
+// Queue represents a single instance of a queue structure.
 // Under the hood, it implements a first in, first out (FIFO), data
 // structure.
 //

@@ -1,10 +1,13 @@
 package pubsub
 
 import (
+	"context"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
-	"github.com/spoke-d/pubsub/matchers"
+	"github.com/spoke-d/task"
+	"github.com/spoke-d/task/tomb"
 )
 
 // TopicMatcher defines a type that can be used for matching topics when
@@ -19,7 +22,12 @@ type Hub struct {
 	index       int
 }
 
-// Publish will notifiy all the subscribers that are interested by calling
+// New creates a Hub for others to utilise.
+func New() *Hub {
+	return &Hub{}
+}
+
+// Publish will notify all the subscribers that are interested by calling
 // their handler function.
 //
 // The data is passed through to each Subscriber untouched. Note that all
@@ -62,7 +70,7 @@ func (h *Hub) Publish(topic string, data interface{}) <-chan struct{} {
 // The return value is a Subscriber that will unsubscribe the caller from
 // the hub, for this subscription.
 func (h *Hub) Subscribe(topic string, handler func(string, interface{})) *Subscriber {
-	return h.SubscribeMatch(matchers.Match(topic), handler)
+	return h.SubscribeMatch(Match(topic), handler)
 }
 
 // SubscribeMatch takes a function that determins whether the topic matches,
@@ -81,6 +89,8 @@ func (h *Hub) SubscribeMatch(matcher TopicMatcher, handler func(string, interfac
 		queue:        NewQueue(),
 		topicMatcher: matcher,
 		handler:      handler,
+		data:         make(chan struct{}, 1),
+		done:         make(chan struct{}),
 	}
 	// Ensure we bump the index of the hub to track subscribers
 	h.index++
@@ -112,6 +122,17 @@ type Subscriber struct {
 	sub *subscriber
 }
 
+// Run creates a task and a schedule to perform the consumption of messages
+// sent to the subscriber from the origin.
+// The interval parameter allows for prioritization of each subscriber
+// independently using the internval time duration. The aim it to provide
+// fair-ness or unfair-ness at a user defined API level. The downside to all of
+// this, is that management of a subscriber is then put on the onus of the
+// callee.
+func (s *Subscriber) Run(interval time.Duration) (task.Func, task.Schedule) {
+	return s.sub.Run(interval)
+}
+
 // Unsubscribe attempts to unsubscribe from the hub, if the subscriber
 // is found within the hub, then a error is returned.
 func (s *Subscriber) Unsubscribe() error {
@@ -133,6 +154,48 @@ type subscriber struct {
 	handler      func(string, interface{})
 
 	data chan struct{}
+	done chan struct{}
+}
+
+// Run creates a task and a schedule to perform the consumption of messages
+// sent to the subscriber from the origin.
+// The interval parameter allows for prioritization of each subscriber
+// independently using the internval time duration. The aim it to provide
+// fair-ness or unfair-ness at a user defined API level. The downside to all of
+// this, is that management of a subscriber is then put on the onus of the
+// callee.
+func (s *subscriber) Run(interval time.Duration) (task.Func, task.Schedule) {
+	worker := func(ctx context.Context) {
+		t := tomb.New()
+		t.Go(func() error {
+			s.run(ctx)
+			return nil
+		})
+		select {
+		case <-t.Dead():
+		case <-ctx.Done():
+		}
+	}
+
+	schedule := task.Every(interval)
+	return worker, schedule
+}
+
+func (s *subscriber) run(context.Context) {
+	select {
+	case <-s.done:
+		return
+	case <-s.data:
+	}
+
+	node, empty := s.popNode()
+	if empty {
+		return
+	}
+
+	evt := node.event
+	s.handler(evt.topic, evt.payload)
+	node.done()
 }
 
 func (s *subscriber) dispatch(event Event, done func()) {
@@ -149,7 +212,24 @@ func (s *subscriber) dispatch(event Event, done func()) {
 }
 
 func (s *subscriber) close() {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 
+	for event, ok := s.queue.Pop(); ok; event, ok = s.queue.Pop() {
+		event.done()
+	}
+	close(s.done)
+}
+
+func (s *subscriber) popNode() (Node, bool) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	node, ok := s.queue.Pop()
+	if !ok {
+		return Node{}, true
+	}
+	return node, s.queue.Len() == 0
 }
 
 // Event represents a typed message when is dispatched with in the hub
