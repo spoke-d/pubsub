@@ -6,6 +6,8 @@ import (
 )
 
 func TestQueueLen(t *testing.T) {
+	t.Parallel()
+
 	t.Run("empty", func(t *testing.T) {
 		q := NewQueue()
 		if expected, actual := 0, q.Len(); expected != actual {
@@ -63,6 +65,8 @@ func TestQueueLen(t *testing.T) {
 }
 
 func TestQueuePop(t *testing.T) {
+	t.Parallel()
+
 	t.Run("empty", func(t *testing.T) {
 		q := NewQueue()
 		node, ok := q.Pop()

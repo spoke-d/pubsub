@@ -10,6 +10,15 @@ import (
 	"github.com/spoke-d/task/tomb"
 )
 
+var (
+	// ErrComplete is used as a sentinel error to identify when a worker has
+	// been run.
+	ErrComplete = errors.New("completed run")
+
+	// ErrTimeout is a sentinel error to identify when a worker has timed out.
+	ErrTimeout = errors.New("timed out")
+)
+
 // TopicMatcher defines a type that can be used for matching topics when
 // dispatching through the hub.
 type TopicMatcher func(string) bool
@@ -49,7 +58,7 @@ func (h *Hub) Publish(topic string, data interface{}) <-chan struct{} {
 	done := make(chan struct{})
 
 	for _, s := range h.subscribers {
-		if s.topicMatcher(topic) {
+		if s.life == Alive && s.topicMatcher(topic) {
 			wait.Add(1)
 			s.dispatch(event, wait.Done)
 		}
@@ -89,8 +98,8 @@ func (h *Hub) SubscribeMatch(matcher TopicMatcher, handler func(string, interfac
 		queue:        NewQueue(),
 		topicMatcher: matcher,
 		handler:      handler,
-		data:         make(chan struct{}, 1),
 		done:         make(chan struct{}),
+		life:         Alive,
 	}
 	// Ensure we bump the index of the hub to track subscribers
 	h.index++
@@ -99,6 +108,21 @@ func (h *Hub) SubscribeMatch(matcher TopicMatcher, handler func(string, interfac
 		hub: h,
 		sub: sub,
 	}
+}
+
+// Close will close any outstanding subscriber messages and shut down each
+// subscriber.
+//
+// At the end, the hub will have no subscribers listening and can be seen as
+// invalid for use.
+func (h *Hub) Close() {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	for _, sub := range h.subscribers {
+		sub.close()
+	}
+	h.subscribers = make([]*subscriber, 0)
 }
 
 func (h *Hub) unsubscribe(id int) error {
@@ -145,6 +169,13 @@ func (s *Subscriber) Close() {
 	s.sub.close()
 }
 
+type Life int
+
+const (
+	Alive Life = iota
+	Dead
+)
+
 type subscriber struct {
 	mutex sync.Mutex
 	id    int
@@ -153,8 +184,8 @@ type subscriber struct {
 	topicMatcher TopicMatcher
 	handler      func(string, interface{})
 
-	data chan struct{}
 	done chan struct{}
+	life Life
 }
 
 // Run creates a task and a schedule to perform the consumption of messages
@@ -165,37 +196,40 @@ type subscriber struct {
 // this, is that management of a subscriber is then put on the onus of the
 // callee.
 func (s *subscriber) Run(interval time.Duration) (task.Func, task.Schedule) {
-	worker := func(ctx context.Context) {
+	worker := func(ctx context.Context) error {
 		t := tomb.New()
 		t.Go(func() error {
-			s.run(ctx)
-			return nil
+			return s.run(ctx)
 		})
 		select {
 		case <-t.Dead():
 		case <-ctx.Done():
+			t.Kill(ErrTimeout)
 		}
+		return t.Err()
 	}
 
 	schedule := task.Every(interval)
 	return worker, schedule
 }
 
-func (s *subscriber) run(context.Context) {
-	select {
-	case <-s.done:
-		return
-	case <-s.data:
-	}
+func (s *subscriber) run(context.Context) error {
+	for {
+		select {
+		case <-s.done:
+			return task.ErrTerminate
+		default:
+		}
 
-	node, empty := s.popNode()
-	if empty {
-		return
-	}
+		node, empty := s.popNode()
+		if empty {
+			return nil
+		}
 
-	evt := node.event
-	s.handler(evt.topic, evt.payload)
-	node.done()
+		evt := node.event
+		s.handler(evt.topic, evt.payload)
+		node.done()
+	}
 }
 
 func (s *subscriber) dispatch(event Event, done func()) {
@@ -206,30 +240,29 @@ func (s *subscriber) dispatch(event Event, done func()) {
 		event: event,
 		done:  done,
 	})
-	if s.queue.Len() == 1 {
-		s.data <- struct{}{}
-	}
 }
 
 func (s *subscriber) close() {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	for event, ok := s.queue.Pop(); ok; event, ok = s.queue.Pop() {
+	for event, empty := s.queue.Pop(); !empty; event, empty = s.queue.Pop() {
 		event.done()
 	}
+
 	close(s.done)
+	s.life = Dead
 }
 
 func (s *subscriber) popNode() (Node, bool) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	node, ok := s.queue.Pop()
-	if !ok {
+	node, empty := s.queue.Pop()
+	if empty {
 		return Node{}, true
 	}
-	return node, s.queue.Len() == 0
+	return node, false
 }
 
 // Event represents a typed message when is dispatched with in the hub
