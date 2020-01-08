@@ -34,12 +34,12 @@ func (f *Queue) Push(event Node) {
 // Returns false if the queue is empty
 func (f *Queue) Pop() (Node, bool) {
 	if len(f.nodes) == 0 {
-		return Node{}, false
+		return Node{}, true
 	}
 
 	var node Node
 	node, f.nodes = f.nodes[0], f.nodes[1:]
-	return node, true
+	return node, false
 }
 
 // Len returns the number of elements currently stored in the queue.

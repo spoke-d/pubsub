@@ -16,9 +16,9 @@ const (
 //
 // This is a convenience around starting a task that will always consume
 // messages when publishing events.
-func Forever(topic string, handler func(string, interface{})) *Hub {
+func Forever(topic string, handler func(string, interface{})) (*Hub, func(time.Duration) error) {
 	hub := New()
 	sub := hub.Subscribe(topic, handler)
-	task.Start(sub.Run(Interval))
-	return hub
+	stop, _ := task.Start(sub.Run(Interval))
+	return hub, stop
 }

@@ -75,6 +75,14 @@ func (g *Group) Stop(timeout time.Duration) error {
 	return g.group.Stop(timeout)
 }
 
+// Close will close all underlying subscribers then stop all the tasks in the
+// group. Starting the group again will be pointless as the hub will be left
+// with no subscribers after closing.
+func (g *Group) Close(timeout time.Duration) error {
+	g.hub.Close()
+	return g.Stop(timeout)
+}
+
 // GroupSubscriber represents a subscription to the hub.
 type GroupSubscriber struct {
 	sub *Subscriber
