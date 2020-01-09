@@ -169,10 +169,15 @@ func (s *Subscriber) Close() {
 	s.sub.close()
 }
 
+// Life describes the life cycle of a subscriber, to prevent a subscriber being
+// used when it's dead.
 type Life int
 
 const (
+	// Alive states that the subscriber is available to use.
 	Alive Life = iota
+
+	// Dead states that the subscriber is dead and shouldn't be used any more.
 	Dead
 )
 
@@ -209,8 +214,15 @@ func (s *subscriber) Run(interval time.Duration) (task.Func, task.Schedule) {
 		return t.Err()
 	}
 
-	schedule := task.Every(interval)
+	schedule := task.Backoff(interval, Exponential)
 	return worker, schedule
+}
+
+// Exponential describes a backoff function that grows linearly with time.
+var Exponential = func(backoff task.BackoffOption) {
+	backoff.SetBackoff(func(n int, t time.Duration) time.Duration {
+		return t * time.Duration(n)
+	})
 }
 
 func (s *subscriber) run(context.Context) error {
