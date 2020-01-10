@@ -201,6 +201,42 @@ func TestHubSubscribe(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("publish with no consequences", func(t *testing.T) {
+		hub := New()
+		defer hub.Close()
+
+		var called int
+		sub := hub.SubscribeMatch(Any(), func(topic string, data interface{}) {
+			called++
+		})
+		stop, _ := task.Start(sub.Run(time.Millisecond))
+		defer stop(time.Second)
+
+		var failed int
+		var last <-chan struct{}
+		for n := 0; n < 10; n++ {
+			last = hub.Publish("topic", nil)
+			go func(done <-chan struct{}) {
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					failed++
+				}
+			}(last)
+		}
+
+		waitForEventToBeSent(t, last)
+
+		time.Sleep(time.Second)
+
+		if expected, actual := 10, called; expected != actual {
+			t.Errorf("expected: %v, actual: %v", expected, actual)
+		}
+		if expected, actual := 0, failed; expected != actual {
+			t.Errorf("expected: %v, actual: %v", expected, actual)
+		}
+	})
 }
 
 func TestHubUnsubscribe(t *testing.T) {
