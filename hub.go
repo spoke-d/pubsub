@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"context"
+	"math"
 	"sync"
 	"time"
 
@@ -214,17 +215,42 @@ func (s *subscriber) Run(interval time.Duration) (task.Func, task.Schedule) {
 		return t.Err()
 	}
 
-	schedule := task.Backoff(interval, Exponential)
+	schedule := task.Backoff(interval, Exponential(interval*10))
 	return worker, schedule
 }
 
-// Exponential describes a backoff function that grows linearly with time.
-var Exponential = func(backoff task.BackoffOption) {
-	backoff.SetBackoff(func(n int, t time.Duration) time.Duration {
-		return t * time.Duration(n)
-	})
+// Exponential describes a backoff function that grows exponentially with time.
+//
+// The max time duration is to limit the duration to an upper cap, to prevent
+// stalling the hub completely.
+var Exponential = func(max time.Duration) func(task.BackoffOptions) {
+	return func(backoff task.BackoffOptions) {
+		amount := 1
+		backoff.SetBackoff(func(n int, t time.Duration) time.Duration {
+			// If it's the first time the backoff has been called, then just
+			// carry on regardless.
+			if n <= 1 {
+				amount = n
+				return t
+			}
+			// Apply the exponential backoff dependant on the number of times
+			// the backoff has been called.
+			base := 2.0
+			b := t * time.Duration(math.Pow(base, float64(amount)))
+			if b >= max {
+				return max
+			}
+			amount = n
+			return b
+		})
+	}
 }
 
+// run will consume all the messages with in the queue, until it's empty. Once
+// it's empty it will ask the runner to backoff. If multiple backoffs are
+// triggered then the number of times a run is called, is reduced.
+//
+// Returning an error tells the task what to do and how to perform.
 func (s *subscriber) run(context.Context) error {
 	for {
 		select {
@@ -235,7 +261,7 @@ func (s *subscriber) run(context.Context) error {
 
 		node, empty := s.popNode()
 		if empty {
-			return nil
+			return task.ErrBackoff
 		}
 
 		evt := node.event
