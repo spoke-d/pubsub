@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+//go:generate mockgen -package pubsub -destination task_mock_test.go github.com/spoke-d/task BackoffOptions
+
 func waitForEventToBeSent(t *testing.T, done <-chan struct{}) {
 	t.Helper()
 

@@ -7,6 +7,8 @@ import (
 	"testing/quick"
 	"time"
 
+	"github.com/golang/mock/gomock"
+
 	"github.com/spoke-d/task"
 )
 
@@ -199,6 +201,42 @@ func TestHubSubscribe(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("publish with no consequences", func(t *testing.T) {
+		hub := New()
+		defer hub.Close()
+
+		var called int
+		sub := hub.SubscribeMatch(Any(), func(topic string, data interface{}) {
+			called++
+		})
+		stop, _ := task.Start(sub.Run(time.Millisecond))
+		defer stop(time.Second)
+
+		var failed int
+		var last <-chan struct{}
+		for n := 0; n < 10; n++ {
+			last = hub.Publish("topic", nil)
+			go func(done <-chan struct{}) {
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					failed++
+				}
+			}(last)
+		}
+
+		waitForEventToBeSent(t, last)
+
+		time.Sleep(time.Second)
+
+		if expected, actual := 10, called; expected != actual {
+			t.Errorf("expected: %v, actual: %v", expected, actual)
+		}
+		if expected, actual := 0, failed; expected != actual {
+			t.Errorf("expected: %v, actual: %v", expected, actual)
+		}
+	})
 }
 
 func TestHubUnsubscribe(t *testing.T) {
@@ -317,4 +355,84 @@ func TestHubWithPublishAndSubscriberDoesNotMatch(t *testing.T) {
 	if err := quick.Check(f, nil); err != nil {
 		t.Error(err)
 	}
+}
+
+func TestExponential(t *testing.T) {
+	t.Run("run once", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		var backoffFunc task.BackoffFunc
+
+		mock := NewMockBackoffOptions(ctrl)
+		mock.EXPECT().SetBackoff(gomock.Any()).Do(func(args ...interface{}) {
+			backoffFunc = args[0].(task.BackoffFunc)
+		})
+
+		fn := Exponential(time.Second)
+		fn(mock)
+
+		result := backoffFunc(1, time.Millisecond)
+		if expected, actual := time.Millisecond, result; expected != actual {
+			t.Errorf("expected: %v, actual: %v", expected, actual)
+		}
+	})
+
+	t.Run("ensure max limit", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		var backoffFunc task.BackoffFunc
+
+		mock := NewMockBackoffOptions(ctrl)
+		mock.EXPECT().SetBackoff(gomock.Any()).Do(func(args ...interface{}) {
+			backoffFunc = args[0].(task.BackoffFunc)
+		})
+
+		fn := Exponential(time.Second)
+		fn(mock)
+
+		for i := 0; i < 100; i++ {
+			result := backoffFunc(i+1, time.Millisecond)
+			if expected, actual := time.Second, result; actual > expected {
+				t.Errorf("expected: %v, actual: %v", expected, actual)
+			}
+		}
+	})
+
+	t.Run("ensure backoff times", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		var backoffFunc task.BackoffFunc
+
+		mock := NewMockBackoffOptions(ctrl)
+		mock.EXPECT().SetBackoff(gomock.Any()).Do(func(args ...interface{}) {
+			backoffFunc = args[0].(task.BackoffFunc)
+		})
+
+		fn := Exponential(time.Second)
+		fn(mock)
+
+		expected := []time.Duration{
+			time.Millisecond * 1,
+			time.Millisecond * 2,
+			time.Millisecond * 4,
+			time.Millisecond * 8,
+			time.Millisecond * 16,
+			time.Millisecond * 32,
+			time.Millisecond * 64,
+			time.Millisecond * 128,
+			time.Millisecond * 256,
+			time.Millisecond * 512,
+			time.Millisecond * 1000,
+			time.Millisecond * 1000,
+		}
+		for i := 0; i < len(expected); i++ {
+			result := backoffFunc(i+1, time.Millisecond)
+			if expected, actual := expected[i], result; actual > expected {
+				t.Errorf("expected: %v, actual: %v", expected, actual)
+			}
+		}
+	})
 }

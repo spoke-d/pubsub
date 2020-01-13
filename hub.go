@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"context"
+	"math"
 	"sync"
 	"time"
 
@@ -28,12 +29,19 @@ type TopicMatcher func(string) bool
 type Hub struct {
 	mutex       sync.Mutex
 	subscribers []*subscriber
+	metrics     Metrics
 	index       int
 }
 
 // New creates a Hub for others to utilise.
-func New() *Hub {
-	return &Hub{}
+func New(options ...HubOption) *Hub {
+	opt := new(hub)
+	for _, option := range options {
+		option(opt)
+	}
+	return &Hub{
+		metrics: opt.Metrics(),
+	}
 }
 
 // Publish will notify all the subscribers that are interested by calling
@@ -100,10 +108,12 @@ func (h *Hub) SubscribeMatch(matcher TopicMatcher, handler func(string, interfac
 		handler:      handler,
 		done:         make(chan struct{}),
 		life:         Alive,
+		metrics:      h.metrics,
 	}
 	// Ensure we bump the index of the hub to track subscribers
 	h.index++
 	h.subscribers = append(h.subscribers, sub)
+	h.metrics.Subscribe()
 	return &Subscriber{
 		hub: h,
 		sub: sub,
@@ -133,11 +143,37 @@ func (h *Hub) unsubscribe(id int) error {
 		if sub.id == id {
 			sub.close()
 			h.subscribers = append(h.subscribers[0:i], h.subscribers[i+1:]...)
+			h.metrics.Unsubscribe()
 			return nil
 		}
 	}
 
 	return errors.Errorf("%v is not found", id)
+}
+
+// HubOptions represents a way to set optional values to a hub option.
+// The HubOptions shows what options are available to change.
+type HubOptions interface {
+	SetMetrics(Metrics)
+}
+
+// HubOption captures a tweak that can be applied to the Hub.
+type HubOption func(HubOptions)
+
+// Captures options for the Hub.
+type hub struct {
+	metrics Metrics
+}
+
+func (h *hub) SetMetrics(m Metrics) {
+	h.metrics = m
+}
+
+func (h *hub) Metrics() Metrics {
+	if h.metrics == nil {
+		return nopMetrics{}
+	}
+	return h.metrics
 }
 
 // Subscriber represents a subscription to the hub.
@@ -169,17 +205,23 @@ func (s *Subscriber) Close() {
 	s.sub.close()
 }
 
+// Life describes the life cycle of a subscriber, to prevent a subscriber being
+// used when it's dead.
 type Life int
 
 const (
+	// Alive states that the subscriber is available to use.
 	Alive Life = iota
+
+	// Dead states that the subscriber is dead and shouldn't be used any more.
 	Dead
 )
 
 type subscriber struct {
-	mutex sync.Mutex
-	id    int
-	queue *Queue
+	mutex   sync.Mutex
+	id      int
+	queue   *Queue
+	metrics Metrics
 
 	topicMatcher TopicMatcher
 	handler      func(string, interface{})
@@ -197,6 +239,10 @@ type subscriber struct {
 // callee.
 func (s *subscriber) Run(interval time.Duration) (task.Func, task.Schedule) {
 	worker := func(ctx context.Context) error {
+		defer func(begin time.Time) {
+			s.metrics.RunDuration(time.Since(begin).Seconds())
+		}(time.Now())
+
 		t := tomb.New()
 		t.Go(func() error {
 			return s.run(ctx)
@@ -209,10 +255,42 @@ func (s *subscriber) Run(interval time.Duration) (task.Func, task.Schedule) {
 		return t.Err()
 	}
 
-	schedule := task.Every(interval)
+	schedule := task.Backoff(interval, Exponential(interval*10))
 	return worker, schedule
 }
 
+// Exponential describes a backoff function that grows exponentially with time.
+//
+// The max time duration is to limit the duration to an upper cap, to prevent
+// stalling the hub completely.
+var Exponential = func(max time.Duration) func(task.BackoffOptions) {
+	return func(backoff task.BackoffOptions) {
+		amount := 1
+		backoff.SetBackoff(func(n int, t time.Duration) time.Duration {
+			// If it's the first time the backoff has been called, then just
+			// carry on regardless.
+			if n <= 1 {
+				amount = n
+				return t
+			}
+			// Apply the exponential backoff dependant on the number of times
+			// the backoff has been called.
+			base := 2.0
+			b := t * time.Duration(math.Pow(base, float64(amount)))
+			if b >= max {
+				return max
+			}
+			amount = n
+			return b
+		})
+	}
+}
+
+// run will consume all the messages with in the queue, until it's empty. Once
+// it's empty it will ask the runner to backoff. If multiple backoffs are
+// triggered then the number of times a run is called, is reduced.
+//
+// Returning an error tells the task what to do and how to perform.
 func (s *subscriber) run(context.Context) error {
 	for {
 		select {
@@ -223,11 +301,12 @@ func (s *subscriber) run(context.Context) error {
 
 		node, empty := s.popNode()
 		if empty {
-			return nil
+			return task.ErrBackoff
 		}
 
 		evt := node.event
 		s.handler(evt.topic, evt.payload)
+		s.metrics.EventHandled(evt.topic)
 		node.done()
 	}
 }
@@ -240,6 +319,7 @@ func (s *subscriber) dispatch(event Event, done func()) {
 		event: event,
 		done:  done,
 	})
+	s.metrics.EventPublished(event.topic)
 }
 
 func (s *subscriber) close() {
