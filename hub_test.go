@@ -239,6 +239,97 @@ func TestHubSubscribe(t *testing.T) {
 	})
 }
 
+func TestSubscriberRun(t *testing.T) {
+	t.Parallel()
+
+	makeSub := func(handler func(string, interface{})) *subscriber {
+		return &subscriber{
+			queue:        NewQueue(),
+			metrics:      nopMetrics{},
+			topicMatcher: Any(),
+			handler:      handler,
+			done:         make(chan struct{}),
+			life:         Alive,
+		}
+	}
+
+	t.Run("terminate", func(t *testing.T) {
+		s := makeSub(func(string, interface{}) {
+			t.Fail()
+		})
+
+		close(s.done)
+
+		err := s.run()
+		if expected, actual := true, err == task.ErrTerminate; expected != actual {
+			t.Errorf("expected: %v, actual: %v", expected, actual)
+		}
+	})
+
+	t.Run("empty queue", func(t *testing.T) {
+		s := makeSub(func(string, interface{}) {
+			t.Fail()
+		})
+
+		err := s.run()
+		if expected, actual := true, err == task.ErrBackoff; expected != actual {
+			t.Errorf("expected: %v, actual: %v", expected, actual)
+		}
+	})
+
+	t.Run("non-empty queue", func(t *testing.T) {
+		var called int
+		s := makeSub(func(string, interface{}) {
+			called++
+		})
+
+		s.queue.Push(Node{
+			event: Event{
+				topic: "test",
+			},
+			done: func() {
+				called++
+			},
+		})
+
+		err := s.run()
+		if expected, actual := true, err == nil; expected != actual {
+			t.Errorf("expected: %v, actual: %v", expected, actual)
+		}
+		if expected, actual := 2, called; expected != actual {
+			t.Errorf("expected: %v, actual: %v", expected, actual)
+		}
+	})
+
+	t.Run("non-empty then empty queue", func(t *testing.T) {
+		var called int
+		s := makeSub(func(string, interface{}) {
+			called++
+		})
+
+		s.queue.Push(Node{
+			event: Event{
+				topic: "test",
+			},
+			done: func() {
+				called++
+			},
+		})
+
+		err := s.run()
+		if expected, actual := true, err == nil; expected != actual {
+			t.Errorf("expected: %v, actual: %v", expected, actual)
+		}
+		err = s.run()
+		if expected, actual := true, err == task.ErrBackoff; expected != actual {
+			t.Errorf("expected: %v, actual: %v", expected, actual)
+		}
+		if expected, actual := 2, called; expected != actual {
+			t.Errorf("expected: %v, actual: %v", expected, actual)
+		}
+	})
+}
+
 func TestHubUnsubscribe(t *testing.T) {
 	t.Parallel()
 
