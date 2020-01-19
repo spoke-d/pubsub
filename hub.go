@@ -66,7 +66,7 @@ func (h *Hub) Publish(topic string, data interface{}) <-chan struct{} {
 	done := make(chan struct{})
 
 	for _, s := range h.subscribers {
-		if s.life == Alive && s.topicMatcher(topic) {
+		if s.isAlive() && s.topicMatcher(topic) {
 			wait.Add(1)
 			s.dispatch(event, wait.Done)
 		}
@@ -218,7 +218,7 @@ const (
 )
 
 type subscriber struct {
-	mutex   sync.Mutex
+	mutex   sync.RWMutex
 	id      int
 	queue   *Queue
 	metrics Metrics
@@ -243,10 +243,16 @@ func (s *subscriber) Run(interval time.Duration) (task.Func, task.Schedule) {
 			s.metrics.RunDuration(time.Since(begin).Seconds())
 		}(time.Now())
 
+		// If the subscriber is dead we shouldn't go any further.
+		if !s.isAlive() {
+			return errors.Errorf("subscriber is dead")
+		}
+
 		t := tomb.New()
-		t.Go(func() error {
-			return s.run(ctx)
-		})
+		if err := t.Go(s.run); err != nil {
+			return err
+		}
+
 		select {
 		case <-t.Dead():
 		case <-ctx.Done():
@@ -291,7 +297,8 @@ var Exponential = func(max time.Duration) func(task.BackoffOptions) {
 // triggered then the number of times a run is called, is reduced.
 //
 // Returning an error tells the task what to do and how to perform.
-func (s *subscriber) run(context.Context) error {
+func (s *subscriber) run() error {
+	var consumed bool
 	for {
 		select {
 		case <-s.done:
@@ -301,13 +308,23 @@ func (s *subscriber) run(context.Context) error {
 
 		node, empty := s.popNode()
 		if empty {
-			return task.ErrBackoff
+			// Only use the backoff error, when nothing is consumed from the
+			// queue. If there are events to be handled, then return back to
+			// indicate that it was successful and a backoff is not required.
+			if !consumed {
+				return task.ErrBackoff
+			}
+			return nil
 		}
 
 		evt := node.event
 		s.handler(evt.topic, evt.payload)
 		s.metrics.EventHandled(evt.topic)
 		node.done()
+
+		// We've consumed an event, we can tell the subscriber to not trigger
+		// a backoff clause.
+		consumed = true
 	}
 }
 
@@ -335,14 +352,21 @@ func (s *subscriber) close() {
 }
 
 func (s *subscriber) popNode() (Node, bool) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
 
 	node, empty := s.queue.Pop()
 	if empty {
 		return Node{}, true
 	}
 	return node, false
+}
+
+func (s *subscriber) isAlive() bool {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	return s.life == Alive
 }
 
 // Event represents a typed message when is dispatched with in the hub
