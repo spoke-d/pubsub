@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -8,7 +9,6 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
-
 	"github.com/spoke-d/task"
 )
 
@@ -260,7 +260,7 @@ func TestSubscriberRun(t *testing.T) {
 
 		close(s.done)
 
-		err := s.run()
+		err := s.run(context.Background())
 		if expected, actual := true, err == task.ErrTerminate; expected != actual {
 			t.Errorf("expected: %v, actual: %v", expected, actual)
 		}
@@ -271,7 +271,7 @@ func TestSubscriberRun(t *testing.T) {
 			t.Fail()
 		})
 
-		err := s.run()
+		err := s.run(context.Background())
 		if expected, actual := true, err == task.ErrBackoff; expected != actual {
 			t.Errorf("expected: %v, actual: %v", expected, actual)
 		}
@@ -292,7 +292,7 @@ func TestSubscriberRun(t *testing.T) {
 			},
 		})
 
-		err := s.run()
+		err := s.run(context.Background())
 		if expected, actual := true, err == nil; expected != actual {
 			t.Errorf("expected: %v, actual: %v", expected, actual)
 		}
@@ -316,11 +316,11 @@ func TestSubscriberRun(t *testing.T) {
 			},
 		})
 
-		err := s.run()
+		err := s.run(context.Background())
 		if expected, actual := true, err == nil; expected != actual {
 			t.Errorf("expected: %v, actual: %v", expected, actual)
 		}
-		err = s.run()
+		err = s.run(context.Background())
 		if expected, actual := true, err == task.ErrBackoff; expected != actual {
 			t.Errorf("expected: %v, actual: %v", expected, actual)
 		}

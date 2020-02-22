@@ -297,7 +297,7 @@ var Exponential = func(max time.Duration) func(task.BackoffOptions) {
 // triggered then the number of times a run is called, is reduced.
 //
 // Returning an error tells the task what to do and how to perform.
-func (s *subscriber) run() error {
+func (s *subscriber) run(_ context.Context) error {
 	var consumed bool
 	for {
 		select {
