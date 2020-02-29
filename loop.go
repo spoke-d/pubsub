@@ -14,9 +14,18 @@ import (
 func Loop(fn task.Func) (func() error, error) {
 	tomb := tomb.New()
 	if err := tomb.Go(func(ctx context.Context) error {
+	LOOP:
 		for {
-			if err := fn(ctx); err != nil {
+			err := fn(ctx)
+			switch {
+			case errors.Cause(err) == task.ErrSkip:
+				continue LOOP
+			case errors.Cause(err) == task.ErrTerminate:
+				fallthrough
+			case err != nil:
 				return errors.WithStack(err)
+			default:
+				continue LOOP
 			}
 		}
 	}); err != nil {
