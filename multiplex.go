@@ -35,3 +35,18 @@ func Multiplexer(hub *Hub, subs ...Sub) func(time.Duration) error {
 		return errors.Errorf(strings.Join(errs, ", "))
 	}
 }
+
+// Forward all messages from one hub to another.
+// Useful to cross boundaries.
+func Forward(hub *Hub, other *Hub) func(time.Duration) error {
+	sub := hub.SubscribeMatch(Any(), func(topic string, data interface{}) {
+		done := other.Publish(topic, data)
+		select {
+		case <-done:
+		case <-time.After(time.Millisecond * 10):
+		}
+	})
+
+	cleanup, _ := task.Start(sub.Run(Interval))
+	return cleanup
+}
