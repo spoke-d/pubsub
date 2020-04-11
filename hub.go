@@ -248,7 +248,7 @@ func (s *subscriber) Run(interval time.Duration) (task.Func, task.Schedule) {
 			return errors.Errorf("subscriber is dead")
 		}
 
-		t := tomb.New()
+		t := tomb.New(false)
 		if err := t.Go(s.run); err != nil {
 			return err
 		}

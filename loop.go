@@ -12,7 +12,7 @@ import (
 // This is useful for exhausting a subscriber without caring about a
 // schedule or interval.
 func Loop(fn task.Func) (func() error, error) {
-	tomb := tomb.New()
+	tomb := tomb.New(false)
 	if err := tomb.Go(func(ctx context.Context) error {
 	LOOP:
 		for {
