@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"context"
 	"time"
 
 	"github.com/spoke-d/task"
@@ -63,8 +64,8 @@ func (g *Group) SubscribeMatch(matcher TopicMatcher, handler func(string, interf
 }
 
 // Start all the tasks in the group.
-func (g *Group) Start() error {
-	return g.group.Start()
+func (g *Group) Start(ctx context.Context) error {
+	return g.group.Start(ctx)
 }
 
 // Stop all tasks in the group.

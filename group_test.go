@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -38,7 +39,7 @@ func TestGroupClose(t *testing.T) {
 			called = true
 		})
 
-		err := group.Start()
+		err := group.Start(context.TODO())
 		if expected, actual := true, err == nil; expected != actual {
 			t.Errorf("expected: %v, actual: %v", expected, actual)
 		}
@@ -73,7 +74,7 @@ func TestGroupSubscribe(t *testing.T) {
 			called = true
 		})
 
-		err := group.Start()
+		err := group.Start(context.TODO())
 		if expected, actual := true, err == nil; expected != actual {
 			t.Errorf("expected: %v, actual: %v", expected, actual)
 		}
@@ -95,7 +96,7 @@ func TestGroupSubscribe(t *testing.T) {
 			called = true
 		})
 
-		err := group.Start()
+		err := group.Start(context.TODO())
 		if expected, actual := true, err == nil; expected != actual {
 			t.Errorf("expected: %v, actual: %v", expected, actual)
 		}
@@ -124,7 +125,7 @@ func TestGroupUnsubscribe(t *testing.T) {
 			called = true
 		})
 
-		err := group.Start()
+		err := group.Start(context.TODO())
 		if expected, actual := true, err == nil; expected != actual {
 			t.Errorf("expected: %v, actual: %v", expected, actual)
 		}
