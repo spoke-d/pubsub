@@ -50,3 +50,18 @@ func Forward(hub *Hub, other *Hub) func(time.Duration) error {
 	cleanup, _ := task.Start(sub.Run(Interval))
 	return cleanup
 }
+
+// ForwardMatcher all messages that match the matcher from one hub to another.
+// Useful to cross boundaries.
+func ForwardMatcher(matcher TopicMatcher, hub *Hub, other *Hub) func(time.Duration) error {
+	sub := hub.SubscribeMatch(matcher, func(topic string, data interface{}) {
+		done := other.Publish(topic, data)
+		select {
+		case <-done:
+		case <-time.After(time.Millisecond * 10):
+		}
+	})
+
+	cleanup, _ := task.Start(sub.Run(Interval))
+	return cleanup
+}
